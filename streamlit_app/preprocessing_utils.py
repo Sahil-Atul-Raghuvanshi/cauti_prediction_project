@@ -19,24 +19,16 @@ def get_feature_order():
     if _feature_order is not None:
         return _feature_order
     
+    # Get project root (go up from streamlit_app to project root)
+    # This file is in streamlit_app/, so go up one level
+    PROJECT_ROOT = Path(__file__).parent.parent
+    
     # Try to load from silver dataset to get feature order
-    silver_path = Path("silver/silver_dataset.csv")
+    silver_path = PROJECT_ROOT / "data" / "silver" / "silver_dataset.csv"
     if silver_path.exists():
         try:
-            df_silver = pd.read_csv(silver_path, nrows=1)
+            df_silver = pd.read_csv(str(silver_path), nrows=1)
             # Remove leakage features and target
-            leakage_features = ['subject_id', 'hadm_id']
-            features = [col for col in df_silver.columns if col not in leakage_features + ['y']]
-            _feature_order = features
-            return features
-        except Exception as e:
-            pass
-    
-    # Try alternative path
-    alt_path = Path("C:/Users/Coditas/Desktop/Projects/Cauti/silver/silver_dataset.csv")
-    if alt_path.exists():
-        try:
-            df_silver = pd.read_csv(alt_path, nrows=1)
             leakage_features = ['subject_id', 'hadm_id']
             features = [col for col in df_silver.columns if col not in leakage_features + ['y']]
             _feature_order = features
@@ -235,7 +227,21 @@ def apply_missing_value_handling(df):
         df['catheter_duration_measured'] = 0
     
     # catheter_size handling
-    if 'catheter_size' in df.columns:
+    # Priority: Use catheter_size_fr directly if it exists (from bronze data)
+    # Otherwise, extract from catheter_size string
+    # Note: -1 means no catheter size present in raw source (missing value)
+    if 'catheter_size_fr' in df.columns:
+        # Already have catheter_size_fr - use it directly
+        df['catheter_size_fr'] = pd.to_numeric(df['catheter_size_fr'], errors='coerce')
+        df['catheter_size_fr'] = df['catheter_size_fr'].fillna(-1)
+        # Clip only non-missing values (6-24), preserve -1 (missing indicator)
+        mask_not_missing = df['catheter_size_fr'] != -1
+        df.loc[mask_not_missing, 'catheter_size_fr'] = df.loc[mask_not_missing, 'catheter_size_fr'].clip(lower=6, upper=24)
+        df['catheter_size_measured'] = (df['catheter_size_fr'] != -1).astype(int)
+        # Drop catheter_size string if it exists (we're using catheter_size_fr directly)
+        df = df.drop(columns=['catheter_size'], errors='ignore')
+    elif 'catheter_size' in df.columns:
+        # Extract from catheter_size string
         df['catheter_size'] = df['catheter_size'].fillna('Unknown')
         df['catheter_size_known'] = (df['catheter_size'] != 'Unknown').astype(int)
         
@@ -318,7 +324,9 @@ def apply_one_hot_encoding(df):
         'discharge_location': ['ACUTE HOSPITAL', 'AGAINST ADVICE', 'DEAD/EXPIRED', 'HOME',
                               'HOME HEALTH CARE', 'HOSPICE', 'LONG TERM CARE HOSPITAL',
                               'REHAB', 'SKILLED NURSING FACILITY', 'UNKNOWN'],
-        'mobility_status': ['AMBULATORY', 'BEDREST', 'RESTRICTED', 'UNKNOWN']
+        'mobility_status': ['Assisted Ambulatory', 'Bedbound', 'Independent Ambulatory',
+                           'Non-ambulatory / Paralysis', 'Out of Bed with Assistance',
+                           'Unknown', 'Wheelchair']
     }
     
     for col in simple_cat_cols:
